@@ -1,19 +1,17 @@
 from __future__ import print_function
 
-import torch
 import torch.backends.cudnn as cudnn
 import torch.nn as nn
 from torch.optim import lr_scheduler
 
-import torchvision.datasets as datasets
-import torchvision.transforms as transforms
-
+import shutil
+import os
 import numpy as np
 import argparse
 
 from experiment import Experiment
 
-from common import model_names, load_model, load_dataset
+from common import model_names, load_model, load_dataset, safe_mkdir
 
 parser = argparse.ArgumentParser(description='PyTorch Training')
 parser.add_argument('data', metavar='DIR', help='path to dataset')
@@ -62,11 +60,20 @@ if __name__ == "__main__":
 
     scheduler = lr_scheduler.StepLR(optimizer, step_size=7, gamma=0.1)
 
+    client = None
     logger = None
     try:
-        logger = CrayonClient(args.host, args.port)
+        client = CrayonClient(args.host, args.port)
+        client.remove_experiment("pytorch_logging")
+        logger = client.create_experiment("pytorch_logging")
+    
+    except ValueError:
+        logger = client.create_experiment("pytorch_logging")
+    
     except:
         print("Cannot create logger")
+    
+    
     datasets, dataloaders = load_dataset(args.arch, args.data, args.batch_size, args.workers)
  
     for param in model.named_parameters():
@@ -74,8 +81,17 @@ if __name__ == "__main__":
             param[1].requires_grad = False
 
 
-    exp = Experiment(args, model, criterion, optimizer, scheduler, log_client=logger)
+    exp = Experiment(model, criterion, optimizer, scheduler, log_client=logger)
     exp.train(args.epochs, dataloaders, args.resume) 
+
+    try:
+        fname = logger.to_zip()
+        client.remove_experiment("pytorch_logging")
+        safe_mkdir('logs/')
+        shutil.move(fname, 'logs/')
+        print("Log stored in file: {}".format(os.path.join('logs', fname)))
+    except:
+        pass
 
 
     #data_transform = transforms.Compose([

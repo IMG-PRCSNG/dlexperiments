@@ -15,18 +15,23 @@ from common import safe_mkdir # Methods
 
 class Experiment(object):
 
-    def __init__(self, args, model, criterion, optimizer, scheduler, log_client = None):
+    def __init__(self, 
+            model, 
+            criterion, 
+            optimizer, 
+            scheduler, 
+            log_client = None, 
+            print_freq=100):
        
         """
-        Utility Class which wraps the model, optimizer, dataset and logging
-        functions
+        Utility Class which accepts the model, optimizer, dataset and logging
+        functions and wraps the training code
 
         Useful for retraining on the imagenet architecture for any image dataset
         """
 
-        self.args = args
-
-        self.cc = log_client
+        self._print_freq = print_freq
+        self.logger = log_client
         self.is_logging = False
         if log_client is not None:
             self.is_logging = True
@@ -52,10 +57,7 @@ class Experiment(object):
 
         # Create the model/arch folder if it doesnt exist
         self.checkpoint_dir = 'model/'
-        self.logging_dir = 'logs/'
         safe_mkdir(self.checkpoint_dir)
-        safe_mkdir(self.logging_dir)
-        
 
         if self._use_gpu:
             self._model.cuda()
@@ -70,7 +72,6 @@ class Experiment(object):
         
         state = {
             'epoch': self._epoch + 1,
-            'arch': self.args.arch,
             'state_dict': self._model.state_dict(),
             'best_loss' : self._best_loss,
             'best_prec1': self._best_prec1,
@@ -87,9 +88,6 @@ class Experiment(object):
         
         checkpoint = torch.load(checkpoint_file)
         
-        if (self.args.arch != checkpoint['arch']):
-            raise ValueError("Architecture mismatch")
-
         self._epoch = checkpoint['epoch']
         self._best_prec1 = checkpoint['best_prec1']
         
@@ -164,7 +162,7 @@ class Experiment(object):
             
             end = time.time()
             
-            if i % self.args.print_freq == 0 or i == num_batches - 1:
+            if i % self._print_freq == 0 or i == num_batches - 1:
                 print('Epoch: [{0}] ({1}/{2})\t'
                       'Batch {batch_time.val:.3f} ({batch_time.avg:.3f})\t'
                       'Data {data_time.val:.3f} ({data_time.avg:.3f})\t'
@@ -185,20 +183,12 @@ class Experiment(object):
            
     def train(self, n_epochs, dataloaders, resume_from=None):
 
-        if resume_from != '':
+        if resume_from and resume_from != '':
             if os.path.isfile(resume_from):
                 self._load_checkpoint(resume_from)
             else:
                 print("=> no checkpoint found at '{}'".format(resume_from))
        
-        logger = None
-        if self.is_logging:
-            try: 
-                self.cc.remove_experiment("pytorch_logging")
-            except ValueError:
-                pass    
-            logger = self.cc.create_experiment("pytorch_logging")
- 
         since = time.time()
 
         while self._epoch < n_epochs:
@@ -224,25 +214,20 @@ class Experiment(object):
             self._best_loss = min(self._best_loss, val_loss)
             self._save_checkpoint(is_best)
 
-            self._vars_to_log.update({
-                'Train Loss': train_loss,
-                'Train Accuracy': train_acc,
-                'Validation Loss': val_loss,
-                'Validation Accuracy': val_acc,
-            })
             if self.is_logging:
-                logger.add_scalar_dict(self._vars_to_log, self._epoch + 1)
+                self._vars_to_log.update({
+                    'Train Loss': train_loss,
+                    'Train Accuracy': train_acc,
+                    'Validation Loss': val_loss,
+                    'Validation Accuracy': val_acc,
+                })
+                self.logger.add_scalar_dict(self._vars_to_log, self._epoch + 1)
+            
             print('Train Loss: {}\t Train Accuracy: {}'.format(train_loss, train_acc))
             print('Val Loss: {}\t Val Accuracy: {}'.format(val_loss, val_acc))
             print()
 
             self._epoch += 1
-
-        # TODO Make a unique filename with timestamp and store it in logs folder
-        if self.is_logging:
-            fname = logger.to_zip()
-            self.cc.remove_experiment("pytorch_logging")
-            print("Log stored in file: {}".format(fname))
 
         time_elapsed = time.time() - since
         print('Training complete in {:.0f}m {:.0f}s'.format(
